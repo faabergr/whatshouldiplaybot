@@ -9,6 +9,7 @@
   "author": "Rick Faaberg",
   "license": "ISC",
   "dependencies": {
-    "bgg": "^1.0.1"
+    "bgg": "^1.0.1",
+    "winston": "^2.4.1"
   }
 }
