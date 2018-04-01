@@ -1,0 +1,14 @@
+{
+  "name": "whatboardgameshouldiplay",
+  "version": "1.0.0",
+  "description": "Picks a random board game from the collection of the supplied BGG user",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Rick Faaberg",
+  "license": "ISC",
+  "dependencies": {
+    "bgg": "^1.0.1"
+  }
+}
