@@ -6,6 +6,7 @@ const T = new Twit(require("./config.js"));
 
 const minutesPattern = /(\d+)?(min|m|minutes|mins)$/;
 const hoursPattern = /(\d+)(hr|h|hours|hrs|hr)$/;
+const playersPattern = /(\d+)(p|players|people|peeps|player)$/;
 
 winston.add(winston.transports.File, { name: "trace", filename: "trace.log" });
 winston.add(winston.transports.File, {
@@ -21,7 +22,8 @@ if (process.argv.length > 2) {
   winston.info(
     `extracted game time of ${params.gameTime} minutes and player count of ${
       params.playerCount
-    }`
+    } and too many players: ${params.tooManyPlayerCounts ===
+      true} and too many times: ${params.tooManyTimes === true}`
   );
 }
 
@@ -63,18 +65,27 @@ function termIsHours(term) {
   return term.match(hoursPattern) !== null;
 }
 
-function getGameTime(time) {
+function getGameTime(timeTerm) {
   let timeInMinutes;
-  if (termIsHours(time)) {
-    let hourMatch = time.match(hoursPattern);
+  if (termIsHours(timeTerm)) {
+    let hourMatch = timeTerm.match(hoursPattern);
     winston.info(`found hours ${hourMatch[1]}`);
     timeInMinutes = hourMatch[1] * 60;
   } else {
-    let minuteMatch = time.match(minutesPattern);
+    let minuteMatch = timeTerm.match(minutesPattern);
     winston.info(`found minutes ${minuteMatch[1]}`);
     timeInMinutes = minuteMatch[1];
   }
   return timeInMinutes;
+}
+
+function termIsPlayerCount(term) {
+  return term.match(playersPattern) !== null;
+}
+
+function getPlayerCount(countTerm) {
+  let playerCountMatch = countTerm.match(playersPattern);
+  return playerCountMatch[1];
 }
 
 function extractParameters(tweet) {
@@ -87,11 +98,10 @@ function extractParameters(tweet) {
   if (times.length > 1) return { tooManyTimes: true };
   params.gameTime = (times.length == 1 && getGameTime(times[0])) || 0;
 
-  let playerCounts = splitTweet.filter(
-    word => word.endsWith("p") || word.endsWith("players")
-  );
+  let playerCounts = splitTweet.filter(termIsPlayerCount);
   if (playerCounts.length > 1) return { tooManyPlayerCounts: true };
-  //params.playerCount = getPlayerCount(playerCounts[0]);
+  params.playerCount =
+    (playerCounts.length == 1 && getPlayerCount(playerCounts[0])) || 0;
 
   return params;
 }
