@@ -33,7 +33,7 @@ if (process.argv.length > 2) {
     requestId
   );
 
-  getRecommendation(params.bggUsername).then(message => {
+  getRecommendation(params).then(message => {
     info(message, requestId);
   });
 }
@@ -44,7 +44,7 @@ stream.on("tweet", tweetEvent);
 function tweetEvent(tweet) {
   let requestId = guid();
   winston.info(`tweet from ${tweet.user.screen_name}`);
-  let params = extractParameters(tweet);
+  let params = extractParameters(tweet.text);
   info(
     `extracted game time of ${params.gameTime} minutes and player count of ${
       params.playerCount
@@ -54,18 +54,19 @@ function tweetEvent(tweet) {
       true} and too many times: ${params.tooManyTimes === true}`,
     requestId
   );
-
   var name = tweet.user.screen_name;
   var nameId = tweet.id_str;
 
-  var reply = `hello @${name}! You are the best!`;
-  var params = { status: reply, in_reply_to_status: nameId };
-  T.post("statuses/update", params, (err, data, response) => {
-    if (err !== undefined) {
-      winston.error(err);
-    } else {
-      winston.info(`Tweeted: ${params.status}`);
-    }
+  getRecommendation(params).then(message => {
+    var reply = `@${name}: ${message}`;
+    var params = { status: reply, in_reply_to_status: nameId };
+    T.post("statuses/update", params, (err, data, response) => {
+      if (err !== undefined) {
+        winston.error(err);
+      } else {
+        winston.info(`Tweeted: ${params.status}`);
+      }
+    });
   });
 }
 
@@ -106,7 +107,7 @@ function getPlayerCount(countTerm) {
 
 function extractParameters(tweet) {
   let params = {};
-  let splitTweet = tweet.split(" ");
+  let splitTweet = tweet.split(/\s+/).filter(term => !term.startsWith("@"));
   let times = splitTweet.filter(
     word => termIsMinutes(word) || termIsHours(word)
   );
@@ -130,60 +131,93 @@ function extractParameters(tweet) {
   return params;
 }
 
-function getRecommendation(bggUsername) {
+function generateMessage(item, bggUsername) {
+  const playerCounts =
+    item.minplayers.value === item.maxplayers.value
+      ? `For ${item.minplayers.value} players,`
+      : `For ${item.minplayers.value}-${item.maxplayers.value} players,`;
+
+  const timeRange =
+    item.minplaytime.value === item.maxplaytime.value
+      ? `it takes approximately ${item.minplaytime.value} minutes`
+      : `it takes between ${item.minplaytime.value} and ${
+          item.maxplaytime.value
+        } minutes`;
+
+  const preamble = chooseOne([
+    "you should play",
+    "why don't you try",
+    "I think you should play"
+  ]);
+
+  let name;
+  if (Array.isArray(item.name)) {
+    name = item.name.filter(n => n.type === "primary")[0].value;
+  } else {
+    name = item.name.value;
+  }
+
+  let message = `${bggUsername}, ${preamble} ${name}. ${playerCounts} ${timeRange} to play.`;
+
+  winston.info(message);
+}
+
+function getRecommendation(params) {
+  let { bggUsername, playerCount, gameTime } = params;
   winston.info(`getting recommendations for ${bggUsername}`);
 
-  return getCollection(bggUsername)
-    .then(results => {
-      if (!results || results.length === 0) {
-        winston.info(`Could not find any results for ${bggUsername}`);
-        return;
+  return getCollection(bggUsername).then(results => {
+    if (!results || results.length === 0) {
+      winston.info(`Could not find any results for ${bggUsername}`);
+      return;
+    }
+    winston.info(`found ${results.length} items`);
+    const ownedBoardgames = results.filter(
+      r => r.subtype === "boardgame" && r.status.own === 1
+    );
+    winston.info(`of those, ${ownedBoardgames.length} are owned`);
+
+    let gameIndex = getRandomInt(0, ownedBoardgames.length);
+    let item = ownedBoardgames[gameIndex];
+
+    getGame(item.objectid).then(i => {
+      if (
+        i.maxplayers.value >= playerCount &&
+        playerCount >= i.minplayers.value
+      )
+        return Promise.resolve(generateMessage(i, bggUsername));
+      else {
+        getGame(item.objectid).then(j => {
+          if (
+            j.maxplayers.value >= playerCount &&
+            playerCount >= j.minplayers.value
+          ) {
+            return Promise.resolve(generateMessage(j, bggUsername));
+          } else {
+            getGame(item.objectid).then(k => {
+              if (
+                k.maxplayers.value >= playerCount &&
+                playerCount >= k.minplayers.value
+              ) {
+                return Promise.resolve(generateMessage(k, bggUsername));
+              } else {
+                winston.info(`Could not find game meeting criteria`);
+                return Promise.reject("Could not find game meeting criteria");
+              }
+            });
+          }
+        });
       }
-      winston.info(`found ${results.length} items`);
-      const ownedBoardgames = results.filter(
-        item => item.subtype === "boardgame" && item.status.own === 1
-      );
-      winston.info(`of those, ${ownedBoardgames.length} are owned`);
-
-      var gameIndex = getRandomInt(0, ownedBoardgames.length);
-      var pickedGame = ownedBoardgames[gameIndex];
-
-      getGame(pickedGame.objectid).then(results => {
-        const item = results;
-        const playerCounts =
-          item.minplayers.value === item.maxplayers.value
-            ? `For ${item.minplayers.value} players,`
-            : `For ${item.minplayers.value}-${item.maxplayers.value} players,`;
-
-        const timeRange =
-          item.minplaytime.value === item.maxplaytime.value
-            ? `it takes approximately ${item.minplaytime.value} minutes`
-            : `it takes between ${item.minplaytime.value} and ${
-                item.maxplaytime.value
-              } minutes`;
-
-        const preamble = chooseOne([
-          "you should play",
-          "why don't you try",
-          "I think you should play"
-        ]);
-
-        let message = `${bggUsername}, ${preamble} ${
-          pickedGame.name.$t
-        }. ${playerCounts} ${timeRange} to play.`;
-
-        winston.info(message);
-
-        return Promise.resolve(message);
-      });
-    })
-    .catch(result => {
-      winston.error(
-        `Could not connect to BGG API at ${result.url}: ${
-          result.raw.response.statusCode
-        } ${result.raw.response.statusMessage}`
-      );
     });
+  });
+  // .catch(result => {
+  //   winston.error(
+  //     `Could not connect to BGG API at ${result.url}: ${
+  //       result.raw.response.statusCode
+  //     } ${result.raw.response.statusMessage}`
+  //   );
+  //   return Promise.reject("Error connecting to BGG API");
+  // })
 }
 
 function chooseOne(choices) {
@@ -216,7 +250,7 @@ function getCollection(username) {
   } else {
     winston.info(
       `Found cache entry for ${username} with ${
-        results.items.item.length
+        collection.length
       } size collection`
     );
     return Promise.resolve(collection);
@@ -242,7 +276,7 @@ function getGame(id) {
       }
     });
   } else {
-    return item;
+    return Promise.resolve(item);
   }
 }
 
