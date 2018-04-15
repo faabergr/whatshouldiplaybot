@@ -21,7 +21,16 @@ const collectionCache = new Map();
 const itemCache = new Map();
 
 if (process.argv.length > 2) {
-  let params = extractParameters(process.argv[2]);
+  thing({
+    user: {
+      screen_name: "faabergr"
+    },
+    text: "45minutes 3p ludothedog"
+  });
+}
+
+async function thing(tweet) {
+  let params = extractParameters(tweet.text);
   let requestId = guid();
   info(
     `extracted game time of ${params.gameTime} minutes and player count of ${
@@ -33,17 +42,16 @@ if (process.argv.length > 2) {
     requestId
   );
 
-  getRecommendation(params).then(message => {
-    info(message, requestId);
-  });
+  var message = await getRecommendation(params, requestId);
+  info(message, requestId);
 }
 
 var stream = T.stream("statuses/filter", { track: ["@wsipbot"] });
 stream.on("tweet", tweetEvent);
 
-function tweetEvent(tweet) {
+async function tweetEvent(tweet) {
   let requestId = guid();
-  winston.info(`tweet from ${tweet.user.screen_name}`);
+  info(`tweet from ${tweet.user.screen_name}`, requestId);
   let params = extractParameters(tweet.text);
   info(
     `extracted game time of ${params.gameTime} minutes and player count of ${
@@ -57,16 +65,15 @@ function tweetEvent(tweet) {
   var name = tweet.user.screen_name;
   var nameId = tweet.id_str;
 
-  getRecommendation(params).then(message => {
-    var reply = `@${name}: ${message}`;
-    var params = { status: reply, in_reply_to_status: nameId };
-    T.post("statuses/update", params, (err, data, response) => {
-      if (err !== undefined) {
-        winston.error(err);
-      } else {
-        winston.info(`Tweeted: ${params.status}`);
-      }
-    });
+  let message = await getRecommendation(params);
+  var reply = `@${name}: ${message}`;
+  var tweetParams = { status: reply, in_reply_to_status: nameId };
+  T.post("statuses/update", tweetParams, (err, data, response) => {
+    if (err !== undefined) {
+      winston.error(err);
+    } else {
+      info(`Tweeted: ${data.text}`, requestId);
+    }
   });
 }
 
@@ -82,15 +89,15 @@ function termIsHours(term) {
   return term.match(hoursPattern) !== null;
 }
 
-function getGameTime(timeTerm) {
+function getGameTime(timeTerm, requestId) {
   let timeInMinutes;
   if (termIsHours(timeTerm)) {
     let hourMatch = timeTerm.match(hoursPattern);
-    winston.info(`found hours ${hourMatch[1]}`);
+    info(`found hours ${hourMatch[1]}`, requestId);
     timeInMinutes = hourMatch[1] * 60;
   } else {
     let minuteMatch = timeTerm.match(minutesPattern);
-    winston.info(`found minutes ${minuteMatch[1]}`);
+    info(`found minutes ${minuteMatch[1]}`, requestId);
     timeInMinutes = minuteMatch[1];
   }
   return timeInMinutes;
@@ -157,124 +164,120 @@ function generateMessage(item, bggUsername) {
     name = item.name.value;
   }
 
-  let message = `${bggUsername}, ${preamble} ${name}. ${playerCounts} ${timeRange} to play.`;
-
-  winston.info(message);
+  return `${bggUsername}, ${preamble} ${name}. ${playerCounts} ${timeRange} to play.`;
 }
 
-function getRecommendation(params) {
+async function getRecommendation(params, requestId) {
   let { bggUsername, playerCount, gameTime } = params;
-  winston.info(`getting recommendations for ${bggUsername}`);
+  info(`getting recommendations for ${bggUsername}`, requestId);
 
-  return getCollection(bggUsername).then(results => {
-    if (!results || results.length === 0) {
-      winston.info(`Could not find any results for ${bggUsername}`);
-      return;
-    }
-    winston.info(`found ${results.length} items`);
-    const ownedBoardgames = results.filter(
-      r => r.subtype === "boardgame" && r.status.own === 1
+  let results = await getCollection(bggUsername);
+  if (!results || results.length === 0) {
+    info(`Could not find any results for ${bggUsername}`, requestId);
+    return Promise.reject();
+  }
+  info(`found ${results.length} items`, requestId);
+  const ownedBoardgames = results.filter(
+    r => r.subtype === "boardgame" && r.status.own === 1
+  );
+  info(`of those, ${ownedBoardgames.length} are owned`, requestId);
+
+  let gameIndex = getRandomInt(0, ownedBoardgames.length);
+  let item = ownedBoardgames[gameIndex];
+
+  let tries = 3;
+  let game = null;
+
+  while (tries-- > 0 && game === null) {
+    game = await attemptToRetrieveGame(item.objectid, playerCount, requestId);
+  }
+
+  if (game !== null) {
+    return Promise.resolve(generateMessage(game, bggUsername));
+  } else {
+    info("Could not find matching game", requestId);
+    return Promise.resolve(
+      `Sorry ${bggUsername}, I could not find a matching game in the first 10 games I looked at`
     );
-    winston.info(`of those, ${ownedBoardgames.length} are owned`);
+  }
+}
 
-    let gameIndex = getRandomInt(0, ownedBoardgames.length);
-    let item = ownedBoardgames[gameIndex];
-
-    getGame(item.objectid).then(i => {
-      if (
-        i.maxplayers.value >= playerCount &&
-        playerCount >= i.minplayers.value
-      )
-        return Promise.resolve(generateMessage(i, bggUsername));
-      else {
-        getGame(item.objectid).then(j => {
-          if (
-            j.maxplayers.value >= playerCount &&
-            playerCount >= j.minplayers.value
-          ) {
-            return Promise.resolve(generateMessage(j, bggUsername));
-          } else {
-            getGame(item.objectid).then(k => {
-              if (
-                k.maxplayers.value >= playerCount &&
-                playerCount >= k.minplayers.value
-              ) {
-                return Promise.resolve(generateMessage(k, bggUsername));
-              } else {
-                winston.info(`Could not find game meeting criteria`);
-                return Promise.reject("Could not find game meeting criteria");
-              }
-            });
-          }
-        });
-      }
-    });
-  });
-  // .catch(result => {
-  //   winston.error(
-  //     `Could not connect to BGG API at ${result.url}: ${
-  //       result.raw.response.statusCode
-  //     } ${result.raw.response.statusMessage}`
-  //   );
-  //   return Promise.reject("Error connecting to BGG API");
-  // })
+async function attemptToRetrieveGame(gameObjectId, playerCount, requestId) {
+  let game = await getGame(gameObjectId, requestId);
+  info(`retrieved game from objectId ${gameObjectId}: ${JSON.stringify(game)}`);
+  if (
+    game &&
+    game.maxplayers &&
+    game.maxplayers.value &&
+    game.maxplayers.value >= playerCount &&
+    game.minplayers &&
+    game.minplayers.value &&
+    playerCount >= game.minplayers.value
+  ) {
+    return Promise.resolve(game);
+  } else {
+    return Promise.reject(game);
+  }
 }
 
 function chooseOne(choices) {
   return choices[getRandomInt(0, choices.length)];
 }
 
-function getCollection(username) {
+async function getCollection(username, requestId) {
   var collection = collectionCache.get(username);
   if (
     !collection ||
     collection.expiration + fiveMinutesInMilliseconds <= Date.now()
   ) {
-    return bgg("collection", {
+    let results = await bgg("collection", {
       username: username,
       excludesubtype: "boardgameexpansion"
-    }).then(results => {
-      if (results.items.item) {
-        winston.info(
-          `Setting cache for ${username} with ${
-            results.items.item.length
-          } size collection`
-        );
-        collectionCache.set(username, {
-          expiration: Date.now(),
-          results: results.items.item
-        });
-      }
-      return Promise.resolve(results.items.item);
     });
+    if (results.items.item) {
+      info(
+        `Setting cache for ${username} with ${
+          results.items.item.length
+        } size collection`,
+        requestId
+      );
+      collectionCache.set(username, {
+        expiration: Date.now(),
+        results: results.items.item
+      });
+    }
+    return Promise.resolve(results.items.item);
   } else {
-    winston.info(
+    info(
       `Found cache entry for ${username} with ${
         collection.length
-      } size collection`
+      } size collection`,
+      requestId
     );
     return Promise.resolve(collection);
   }
 }
 
-function getGame(id) {
+async function getGame(id, requestId) {
   let item = itemCache.get(id);
   if (!item || item.expiration + fiveMinutesInMilliseconds <= Date.now()) {
-    winston.info(
+    info(
       `Cache miss on game ${id}, retrieving from bgg (item was expired: ${(item &&
         item.expiration + fiveMinutesInMilliseconds <= Date.now()) ||
-        false})`
+        false})`,
+      requestId
     );
-    return bgg("thing", { id: id }).then(results => {
-      if (results.items.item) {
-        winston.info(`Retrieved info on game ${id} from bgg, setting cache`);
-        itemCache.set(id, {
-          expiration: Date.now(),
-          results: results.items.item
-        });
-        return Promise.resolve(results.items.item);
-      }
-    });
+    let results = await bgg("thing", { id: id });
+    if (results.items.item) {
+      info(`Retrieved info on game ${id} from bgg, setting cache`, requestId);
+      itemCache.set(id, {
+        expiration: Date.now(),
+        results: results.items.item
+      });
+      return Promise.resolve(results.items.item);
+    } else {
+      return Promise.reject();
+    }
   } else {
     return Promise.resolve(item);
   }
