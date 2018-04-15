@@ -65,9 +65,13 @@ async function tweetEvent(tweet) {
   var name = tweet.user.screen_name;
   var nameId = tweet.id_str;
 
-  let message = await getRecommendation(params);
-  var reply = `@${name}: ${message}`;
-  var tweetParams = { status: reply, in_reply_to_status: nameId };
+  let message = await getRecommendation(params, requestId);
+  var reply = `@${name} ${message}`;
+  var tweetParams = {
+    status: reply,
+    in_reply_to_status: nameId,
+    in_reply_to_status_id: tweet.id_str
+  };
   T.post("statuses/update", tweetParams, (err, data, response) => {
     if (err !== undefined) {
       winston.error(err);
@@ -164,7 +168,9 @@ function generateMessage(item, bggUsername) {
     name = item.name.value;
   }
 
-  return `${bggUsername}, ${preamble} ${name}. ${playerCounts} ${timeRange} to play.`;
+  return `${bggUsername}, ${preamble} ${name}. ${playerCounts} ${timeRange} to play. Check out https://boardgamegeek.com/boardgame/${
+    item.id
+  }/ for more info.`;
 }
 
 async function getRecommendation(params, requestId) {
@@ -216,7 +222,7 @@ async function attemptToRetrieveGame(gameObjectId, playerCount, requestId) {
   ) {
     return Promise.resolve(game);
   } else {
-    return Promise.reject(game);
+    return Promise.resolve(null);
   }
 }
 
