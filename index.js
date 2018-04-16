@@ -65,7 +65,24 @@ async function tweetEvent(tweet) {
   var name = tweet.user.screen_name;
   var nameId = tweet.id_str;
 
-  let message = await getRecommendation(params, requestId);
+  let message;
+  const instructions =
+    ' Please tweet in this format: "<playercount> <maxtime> <bggusername>" (e.g., "2players 60min MyBggUsername" or "4p 2hrs CoolPerson21" without the quotes)';
+  if (params.tooManyPlayerCounts) {
+    message = "Too many player counts provided." + instructions;
+  } else if (params.tooManyTimes) {
+    message = "Too many available times provided." + instructions;
+  } else if (params.tooManyBggUsernames) {
+    message = "Too many BGG usernames provided." + instructions;
+  } else if (params.tooFewBggUsernames) {
+    message = "Please provide your BGG username." + instructions;
+  } else if (params.playerCount === 0) {
+    message = "Player count was not given!" + instructions;
+  } else if (params.gameTime === 0) {
+    message = "No game time was given!" + instructions;
+  } else {
+    message = await getRecommendation(params, requestId);
+  }
   var reply = `@${name} ${message}`;
   var tweetParams = {
     status: reply,
@@ -111,12 +128,13 @@ function termIsPlayerCount(term) {
   return term.match(playersPattern) !== null;
 }
 
-function getPlayerCount(countTerm) {
+function getPlayerCount(countTerm, requestId) {
   let playerCountMatch = countTerm.match(playersPattern);
+  info(`Found count of ${playerCountMatch[1]}`, requestId);
   return playerCountMatch[1];
 }
 
-function extractParameters(tweet) {
+function extractParameters(tweet, requestId) {
   let params = {};
   let splitTweet = tweet.split(/\s+/).filter(term => !term.startsWith("@"));
   let times = splitTweet.filter(
@@ -124,19 +142,21 @@ function extractParameters(tweet) {
   );
 
   if (times.length > 1) return { tooManyTimes: true };
-  params.gameTime = (times.length == 1 && getGameTime(times[0])) || 0;
+  params.gameTime =
+    (times.length == 1 && getGameTime(times[0], requestId)) || 0;
 
   let playerCounts = splitTweet.filter(termIsPlayerCount);
   if (playerCounts.length > 1) return { tooManyPlayerCounts: true };
   params.playerCount =
-    (playerCounts.length == 1 && getPlayerCount(playerCounts[0])) || 0;
+    (playerCounts.length == 1 && getPlayerCount(playerCounts[0], requestId)) ||
+    0;
 
   let unclassifiedTerms = splitTweet.filter(
     term =>
       !termIsMinutes(term) && !termIsHours(term) && !termIsPlayerCount(term)
   );
-  if (unclassifiedTerms > 1) return { tooManyBggUsernames: true };
-  if (unclassifiedTerms === 0) return { tooFewBggUsernames: true };
+  if (unclassifiedTerms.length > 1) return { tooManyBggUsernames: true };
+  if (unclassifiedTerms.length === 0) return { tooFewBggUsernames: true };
 
   params.bggUsername = unclassifiedTerms[0];
   return params;
@@ -180,7 +200,9 @@ async function getRecommendation(params, requestId) {
   let results = await getCollection(bggUsername);
   if (!results || results.length === 0) {
     info(`Could not find any results for ${bggUsername}`, requestId);
-    return Promise.reject();
+    return Promise.resolve(
+      `Sorry, I couldn't find a BGG collection for ${bggUsername}. Please check your spelling and try again.`
+    );
   }
   info(`found ${results.length} items`, requestId);
   const ownedBoardgames = results.filter(
@@ -240,7 +262,7 @@ async function getCollection(username, requestId) {
       username: username,
       excludesubtype: "boardgameexpansion"
     });
-    if (results.items.item) {
+    if (results.items && results.items.item) {
       info(
         `Setting cache for ${username} with ${
           results.items.item.length
@@ -251,8 +273,14 @@ async function getCollection(username, requestId) {
         expiration: Date.now(),
         results: results.items.item
       });
+      return Promise.resolve(results.items.item);
+    } else if (results.errors.error) {
+      winston.error(`Could not find username ${username}`, {
+        requestId: requestId
+      });
     }
-    return Promise.resolve(results.items.item);
+    info(`Could not find any results for ${username}`);
+    return Promise.resolve(null);
   } else {
     info(
       `Found cache entry for ${username} with ${
@@ -295,8 +323,8 @@ function getRandomInt(min, max) {
   return Math.floor(Math.random() * (max - min)) + min; //The maximum is exclusive and the minimum is inclusive
 }
 
-function info(message, guid) {
-  winston.info(message, { requestId: guid });
+function info(message, requestId) {
+  winston.info(message, { requestId: requestId });
 }
 
 function guid() {
