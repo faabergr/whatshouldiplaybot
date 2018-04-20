@@ -130,7 +130,7 @@ function termIsPlayerCount(term) {
 
 function getPlayerCount(countTerm, requestId) {
   let playerCountMatch = countTerm.match(playersPattern);
-  info(`Found count of ${playerCountMatch[1]}`, requestId);
+  info(`found count of ${playerCountMatch[1]}`, requestId);
   return playerCountMatch[1];
 }
 
@@ -197,26 +197,26 @@ async function getRecommendation(params, requestId) {
   let { bggUsername, playerCount, gameTime } = params;
   info(`getting recommendations for ${bggUsername}`, requestId);
 
-  let results = await getCollection(bggUsername);
-  if (!results || results.length === 0) {
+  let collection = await getCollection(bggUsername);
+  if (!collection || !collection.results || collection.results.length === 0) {
     info(`Could not find any results for ${bggUsername}`, requestId);
     return Promise.resolve(
       `Sorry, I couldn't find a BGG collection for ${bggUsername}. Please check your spelling and try again.`
     );
   }
-  info(`found ${results.length} items`, requestId);
-  const ownedBoardgames = results.filter(
+  info(`found ${collection.results.length} items`, requestId);
+  const ownedBoardgames = collection.results.filter(
     r => r.subtype === "boardgame" && r.status.own === 1
   );
   info(`of those, ${ownedBoardgames.length} are owned`, requestId);
 
-  let gameIndex = getRandomInt(0, ownedBoardgames.length);
-  let item = ownedBoardgames[gameIndex];
-
-  let tries = 3;
+  const totalTries = 10;
+  let tries = totalTries;
   let game = null;
 
   while (tries-- > 0 && game === null) {
+    let gameIndex = getRandomInt(0, ownedBoardgames.length);
+    let item = ownedBoardgames[gameIndex];
     game = await attemptToRetrieveGame(item.objectid, playerCount, requestId);
   }
 
@@ -225,7 +225,7 @@ async function getRecommendation(params, requestId) {
   } else {
     info("Could not find matching game", requestId);
     return Promise.resolve(
-      `Sorry ${bggUsername}, I could not find a matching game in the first 10 games I looked at`
+      `Sorry ${bggUsername}, I could not find a matching game in the first ${totalTries} games I looked at`
     );
   }
 }
